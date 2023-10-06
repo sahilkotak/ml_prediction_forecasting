@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "ml-pred-forecasting"
+version = "1.0"
+description = "Retail Sales Prediction and Forecasting"
+authors = ["sahilkotak <40324523+sahilkotak@users.noreply.github.com>"]
+readme = "README.md"
+packages = [{include = "ml_pred_forecasting"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
