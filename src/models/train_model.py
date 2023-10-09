@@ -57,7 +57,7 @@ def train_xgb_model(train_data, val_data, features, target):
     params = {
         'objective': 'reg:squarederror',
         'learning_rate': 0.05,
-        'max_depth': 10,
+        'max_depth': 5,
         'subsample': 0.7,
         'colsample_bytree': 0.7,
         'eval_metric': 'rmse'
@@ -67,9 +67,9 @@ def train_xgb_model(train_data, val_data, features, target):
     
     model = xgb.train(params, 
                       dtrain, 
-                      num_boost_round=1000, 
+                      num_boost_round=300, 
                       evals=evals, 
-                      early_stopping_rounds=50, 
-                      verbose_eval=100)
+                      early_stopping_rounds=10, 
+                      verbose_eval=10)
     
     return model

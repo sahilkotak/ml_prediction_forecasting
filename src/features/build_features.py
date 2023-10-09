@@ -34,19 +34,3 @@ def create_trend_and_special_day_features(df):
     df['is_weekend'] = df['date'].dt.weekday >= 5
     
     return df
-
-def encode_categoricals(df, cols=['item_id', 'store_id']):
-    """
-    Encode categorical features.
-    
-    Parameters:
-    - df: DataFrame with categorical columns.
-    - cols: List of columns to encode.
-    
-    Returns:
-    - DataFrame with encoded features.
-    """
-    for col in cols:
-        df[col] = df[col].astype('category').cat.codes
-    
-    return df
