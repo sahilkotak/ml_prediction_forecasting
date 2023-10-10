@@ -13,20 +13,31 @@ recent_data = pd.read_parquet('src/recent_data.parquet')
 sell_price_df = pd.read_parquet('src/weekly_sell_price.parquet')
 feature_order = load('src/feature_order.joblib')
 
+# Load the Prophet model
+prophet_model = load('models/prophet_model_with_events.joblib')
+prophet_data = pd.read_csv("src/prophet_ready_data.csv")
+prophet_data['ds'] = pd.to_datetime(prophet_data['ds'])  # Convert 'ds' column to datetime format
+
+
 @app.get("/")
 def read_root():
     return {
-        "description": "Retail Sales Prediction and Forecasting",
-        "endpoints": ["/", "/health", "/sales/stores/items"],
-        "github": "https://github.com/sahilkotak/ml-pred-forecasting"
+        "description": "This is a Retail Sales Prediction and Forecasting API. It uses machine learning models to predict sales for a given item in a specific store on a particular date. It also forecasts future sales using the Prophet model.",
+        "endpoints": {
+            "/": "Displays this information.",
+            "/health": "Checks the health of the API.",
+            "/sales/stores/items": "Predicts sales for a given item in a specific store on a particular date. Expected input parameters are 'item_id', 'store_id', 'date', 'event_name', and 'event_type'. The output is a JSON object with the predicted sales.",
+            "/sales/national/": "Returns the forecasted sales volume for the next 7 days from the input date for all stores and items combined at a national level."
+        },
+        "github": "https://github.com/sahilkotak/ml-pred-forecasting",
     }
 
 @app.get("/health/")
 def health_check():
-    return {"message": "Welcome to our Sales Prediction API!"}
+    return {"message": "Welcome to our Sales Prediction API!"}, 200
 
 @app.get("/sales/stores/items/")
-def get_sales_prediction(item_id: str, store_id: str, date: str, wm_yr_wk: int, event_name: str = 'NoEvent', event_type: str = 'NoEvent'):
+def get_sales_prediction(item_id: str, store_id: str, date: str, event_name: str = 'NoEvent', event_type: str = 'NoEvent'):
     # Create a dataframe with input data
     df = pd.DataFrame({
         'item_id': [item_id],
@@ -34,13 +45,13 @@ def get_sales_prediction(item_id: str, store_id: str, date: str, wm_yr_wk: int, 
         'date': [pd.to_datetime(date)],
         'event_name': [event_name],
         'event_type': [event_type],
-        'wm_yr_wk': [wm_yr_wk]
     })
     print("Initial DataFrame:\n", df)
 
     # Compute wm_yr_wk
-    # df['wm_yr_wk'] = df['date'].dt.year * 100 + df['date'].dt.isocalendar().week
-    # print("After computing wm_yr_wk:\n", df)
+    df['wm_yr_wk'] = df['date'].dt.strftime('11%y').astype(int) * 100 + \
+                    (df['date'].dt.strftime('%W').astype(int) - 4)
+    print("After computing wm_yr_wk:\n", df)
     
     # Look up the sell_price
     price_lookup = sell_price_df.query('item_id == @item_id and store_id == @store_id and wm_yr_wk == @df.wm_yr_wk.iat[0]')
@@ -100,4 +111,40 @@ def get_sales_prediction(item_id: str, store_id: str, date: str, wm_yr_wk: int, 
     
     print("Raw prediction:", prediction[0])
 
-    return {"sales_prediction": float(prediction[0])}
+    return {"prediction": float(prediction[0])}
+
+@app.get("/sales/national/")
+def get_sales_forecast(date: str):
+    print("Starting sales forecast...")
+    
+    # Try to convert the string date to datetime format using the specified format
+    try:
+        input_date = datetime.datetime.strptime(date, '%d/%m/%Y')
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Please use dd/mm/yyyy format.")
+    
+    print("Input date:", input_date)
+
+    # Create a dataframe with the input date and the next 7 days
+    future_dates = [input_date + datetime.timedelta(days=i) for i in range(8)]
+    future = pd.DataFrame({'ds': future_dates})
+
+    # Append the historical data from the CSV to the future dataframe
+    future = pd.concat([prophet_data[['ds']], future], ignore_index=True).drop_duplicates()
+    print("Future dates with historical data:\n", future)
+
+    # Predict using Prophet
+    forecast = prophet_model.predict(future)
+    print("Forecast:\n", forecast)
+    
+    # Extract the required forecast data
+    forecast_data = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(8)
+    print("Forecast data:\n", forecast_data)
+    
+    # Convert the forecast data to the desired dictionary format
+    forecast_dict = {row['ds'].strftime('%d/%m/%Y'): round(row['yhat'], 2) for row in forecast_data.to_dict(orient='records')}
+    
+    print("Forecast dictionary:\n", forecast_dict)
+    
+    print("Finished sales forecast.")
+    return forecast_dict
