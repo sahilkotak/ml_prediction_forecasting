@@ -2,14 +2,16 @@ from fastapi import FastAPI, HTTPException
 from joblib import load
 import pandas as pd
 import datetime
+import xgboost as xgb
 
 app = FastAPI()
 
 # Load the model, encoders, and recent data
-model = load('models/xgb_model.joblib')
-encoders_dict = load('encoders_dict.joblib')
-recent_data = pd.read_parquet('recent_data.parquet')
-sell_price_df = pd.read_parquet('weekly_sell_price.parquet')
+model = load('models/xgb_model_sample.joblib')
+encoders_dict = load('src/encoders_dict.joblib')
+recent_data = pd.read_parquet('src/recent_data.parquet')
+sell_price_df = pd.read_parquet('src/weekly_sell_price.parquet')
+feature_order = load('src/feature_order.joblib')
 
 @app.get("/")
 def read_root():
@@ -24,18 +26,21 @@ def health_check():
     return {"message": "Welcome to our Sales Prediction API!"}
 
 @app.get("/sales/stores/items/")
-def get_sales_prediction(item_id: str, store_id: str, date: str, event_name: str = 'NoEvent', event_type: str = 'NoEvent'):
+def get_sales_prediction(item_id: str, store_id: str, date: str, wm_yr_wk: int, event_name: str = 'NoEvent', event_type: str = 'NoEvent'):
     # Create a dataframe with input data
     df = pd.DataFrame({
         'item_id': [item_id],
         'store_id': [store_id],
         'date': [pd.to_datetime(date)],
         'event_name': [event_name],
-        'event_type': [event_type]
+        'event_type': [event_type],
+        'wm_yr_wk': [wm_yr_wk]
     })
+    print("Initial DataFrame:\n", df)
 
     # Compute wm_yr_wk
-    df['wm_yr_wk'] = df['date'].dt.year * 100 + df['date'].dt.week
+    # df['wm_yr_wk'] = df['date'].dt.year * 100 + df['date'].dt.isocalendar().week
+    # print("After computing wm_yr_wk:\n", df)
     
     # Look up the sell_price
     price_lookup = sell_price_df.query('item_id == @item_id and store_id == @store_id and wm_yr_wk == @df.wm_yr_wk.iat[0]')
@@ -45,15 +50,14 @@ def get_sales_prediction(item_id: str, store_id: str, date: str, event_name: str
         # Use last known price if future date not available
         last_known_price = sell_price_df.query('item_id == @item_id and store_id == @store_id')['sell_price'].iloc[-1]
         df['sell_price'] = last_known_price
+    print("After looking up the sell_price:\n", df)
 
     # Compute other required features
     df['id'] = df['item_id'] + "_" + df['store_id'] + "_evaluation"
-    df['dept_id'] = "_".join(df['item_id'].split("_")[:2])
-    df['cat_id'] = df['item_id'].split("_")[0]
-    df['state_id'] = df['store_id'].split("_")[0]
-    df['wm_yr_wk'] = df['date'].dt.year * 100 + df['date'].dt.week
-    df['event_name'] = 'NoEvent'
-    df['event_type'] = 'NoEvent'
+    df['dept_id'] = df['item_id'].str.split("_").str[:2].str.join("_")
+    df['cat_id'] = df['item_id'].str.split("_").str[0]
+    df['state_id'] = df['store_id'].str.split("_").str[0]
+    print("After computing other required features:\n", df)
 
     # Update the placeholders using recent data
     relevant_data = recent_data[(recent_data['item_id'] == item_id) & (recent_data['store_id'] == store_id)].sort_values(by='date', ascending=False).head(1)
@@ -63,14 +67,37 @@ def get_sales_prediction(item_id: str, store_id: str, date: str, event_name: str
             df[col] = relevant_data[col].values[0]
         else:
             df[col] = 0
+    print("After updating the placeholders using recent data:\n", df)
 
     df['is_weekend'] = df['date'].dt.weekday >= 5
+    print("After computing is_weekend:\n", df)
 
-    # Encode categorical features using the encoders
+    # Apply label encoding
     for col, encoder in encoders_dict.items():
-        df[col] = encoder.transform(df[col])
+        try:
+            df[col] = encoder.transform(df[col])
+        except ValueError as e:
+            print(f"Error in column: {col}")
+        # Handle or log the error
+    print("After applying label encoding:\n", df)
+
+    # Drop the 'date' column and ensure 'wm_yr_wk' is of type int
+    df.drop(columns=['date'], inplace=True)
+    df['wm_yr_wk'] = df['wm_yr_wk'].astype(int)
+    print("After dropping the 'date' column and ensuring 'wm_yr_wk' is of type int:\n", df)
+
+    #Re-ordering the features
+    df = df[feature_order]
+    print("After re-ordering the features:\n", df)
+
+    
+    # Convert the dataframe to DMatrix
+    data_dmatrix = xgb.DMatrix(df)
+    print("After converting the dataframe to DMatrix:\n", data_dmatrix)
 
     # Predict
-    prediction = model.predict(df)
+    prediction = model.predict(data_dmatrix)
+    
+    print("Raw prediction:", prediction[0])
 
-    return {"sales_prediction": prediction[0]}
+    return {"sales_prediction": float(prediction[0])}
